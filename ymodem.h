@@ -43,6 +43,8 @@
 
 #define YMODEM_END_SESSION_SEND_CAN_NUM  0x07
 
+#define YMODEM_TIMEOUT		60
+
 /* ASCII control codes: */
 enum ymodem_code {
     YMODEM_CODE_NONE = 0x0,

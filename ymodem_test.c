@@ -122,13 +122,13 @@ int send(const char* file_name)
     printf("Send Ymodem! file: %s\r\n", file_name);
 
     strcpy(ymodem.file_name, file_name);
-    ymodem.data = (unsigned char *)malloc(300*1024);
-
+    
     fd = open(file_name, O_RDONLY);
     if (fd <= 0)
         return -1;
     //get file data
     index = 0;
+    ymodem.data = (unsigned char *)malloc(300*1024);
     do {
         size = read(fd, &ymodem.data[index], 1024);
         if (size)

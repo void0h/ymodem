@@ -4,6 +4,15 @@
 
 #define YMODEM_SEND_MAX_PACKET_SIZE      PACKET_1K_SIZE
 
+
+#define YMODEM_DEBUG   0
+
+#if YMODEM_DEBUG
+#define ym_printf(...)      printf(__VA_ARGS__)
+#else
+#define ym_printf(...)
+#endif /*YMODEM_DEBUG*/
+
 /* http://www.ccsinfo.com/forum/viewtopic.php?t=24977 */
 unsigned short crc16(const unsigned char *buf, unsigned long count)
 {
@@ -65,100 +74,107 @@ static const char *u32_to_str(unsigned int val)
 
 static int ymodem_show_packet(unsigned char *packet, unsigned int packet_size)
 {
+#if YMODEM_DEBUG    
     switch (packet[0]) {
     case YMODEM_CODE_SOH:
-        printf("SOH ");
+        ym_printf("SOH ");
         break;
     case YMODEM_CODE_STX:
-        printf("STX ");
+        ym_printf("STX ");
         break;
     case YMODEM_CODE_EOT:
-        printf("EOT ");
+        ym_printf("EOT ");
         break;
     case YMODEM_CODE_ACK:
-        printf("ACK ");
+        ym_printf("ACK ");
         break;
     case YMODEM_CODE_NAK:
-        printf("NAK ");
+        ym_printf("NAK ");
         break;
     case YMODEM_CODE_CAN:
-        printf("CAN ");
+        ym_printf("CAN ");
         break;
     default:
         break;
     }
-    if (packet_size)
-        printf("%02X %02X Data[%d] CRC CRC\r\n", packet[1], packet[2], packet_size);
-    else
-        printf("\r\n");
+    if (packet_size) {
+        ym_printf("%02X %02X Data[%d] CRC CRC\r\n", packet[1], packet[2], packet_size);
+    } else {
+        ym_printf("\r\n");
+    }
+#endif
+	return 0;
 }
 
-static int ymodem_putchar_and_show(struct ymodem *ymodem, int ch)
+static int ymodem_putc_and_show(struct ymodem *ymodem, unsigned char ch)
 {
     if (ch == YMODEM_CODE_EOT) {
-        printf("EOT\r\n");
+        ym_printf("EOT\r\n");
         return ymodem->putchar(ch);
     }
 
-    printf("\t\t\t\t");
+#if YMODEM_DEBUG
+    ym_printf("\t\t\t\t");
     
     switch (ch) {
     case YMODEM_CODE_CRC:
-        printf("C\r\n");
+        ym_printf("C\r\n");
         break;
     case YMODEM_CODE_CAN:
-        printf("CAN\r\n");
+        ym_printf("CAN\r\n");
         break;
     case YMODEM_CODE_NAK:
-        printf("NAK\r\n");
+        ym_printf("NAK\r\n");
         break;
     case YMODEM_CODE_ACK:
-        printf("ACK\r\n");
+        ym_printf("ACK\r\n");
         break;
     default:
         break;
     }
+#endif  /*YMODEM_DEBUG*/
     return ymodem->putchar(ch);
 }
 
-static int ymodem_getchar_and_show(struct ymodem *ymodem)
+static int ymodem_getc_and_show(struct ymodem *ymodem)
 {
     int ch;
 
-
     ch = ymodem->getchar();
-    printf("\t\t\t\t");
+
+#if YMODEM_DEBUG
+    ym_printf("\t\t\t\t");
     
     switch (ch) {
     case YMODEM_CODE_CRC:
-        printf("C\r\n");
+        ym_printf("C\r\n");
         break;
     case YMODEM_CODE_CAN:
-        printf("CAN\r\n");
+        ym_printf("CAN\r\n");
         break;
     case YMODEM_CODE_NAK:
-        printf("NAK\r\n");
+        ym_printf("NAK\r\n");
         break;
     case YMODEM_CODE_ACK:
-        printf("ACK\r\n");
+        ym_printf("ACK\r\n");
         break;
     default:
         break;
     }
+#endif /*YMODEM_DEBUG*/
     return ch;
 }
 
-static int receive_packet(struct ymodem *ymodem, unsigned char *data, int *length)
+static int receive_packet(struct ymodem *ymodem, unsigned char *data, unsigned long *length)
 {
     int i, c;
-    unsigned int packet_size;
+    unsigned long packet_size;
 
     *length = 0;
 
     c = ymodem->getchar();
-    if (c < 0) {
+    if (c < 0)
         return -1;
-    }
     
     *data = (unsigned char)c;
 
@@ -175,7 +191,6 @@ static int receive_packet(struct ymodem *ymodem, unsigned char *data, int *lengt
     case YMODEM_CODE_CAN:
             c = ymodem->getchar();
             if (c == YMODEM_CODE_CAN) {
-                    *length = -1;
                     return 0;
             }
     default:
@@ -185,9 +200,7 @@ static int receive_packet(struct ymodem *ymodem, unsigned char *data, int *lengt
             * former case deserves a NAK, but for now we'll just treat this
             * as an abort case.
             */
-            printf("unknows code:%d\r\n", c);
-            *length = -1;
-            return 0;
+            return -1;
     }
 
     
@@ -204,7 +217,7 @@ static int receive_packet(struct ymodem *ymodem, unsigned char *data, int *lengt
         * Caller should check for in-order arrival.
         */
     if (data[PACKET_SEQNO_INDEX] != ((data[PACKET_SEQNO_COMP_INDEX] ^ 0xff) & 0xff)) {
-            return 1;
+        return 1;
     }
 
     if (crc16(data + PACKET_HEADER, packet_size + PACKET_TRAILER) != 0) {
@@ -220,28 +233,30 @@ OUT:
                                                
 static int ymodem_handshake(struct ymodem *ymodem)
 {
-    int timeout = 1000;
-    int ch = -1, ret = -1;
-    int packet_size = 0;
+    int timeout = YMODEM_TIMEOUT;
+    int ret = -1;
+    unsigned long packet_size = 0;
     unsigned char packet[PACKET_OVERHEAD+PACKET_1K_SIZE] = {0};
     char *file_size;
 
     ymodem->stage = YMODEM_STAGE_ESTABLISHING;
 
     while (timeout--) {
-        //ymodem->putchar(YMODEM_CODE_CRC);   //send 'C'
-        ymodem_putchar_and_show(ymodem, YMODEM_CODE_CRC);
+        ymodem_putc_and_show(ymodem, YMODEM_CODE_CRC);  //send 'C'
 
         ret = receive_packet(ymodem, packet, &packet_size);
         if (ret == 0 && packet_size >= PACKET_SIZE) {
-            ymodem_putchar_and_show(ymodem, YMODEM_CODE_ACK);
-            ymodem_putchar_and_show(ymodem, YMODEM_CODE_CRC);
-            strcpy(ymodem->file_name, &packet[PACKET_HEADER]);
+            
+            strcpy(ymodem->file_name, (const char *)&packet[PACKET_HEADER]);
             file_size = (char *)&packet[PACKET_HEADER + strlen(ymodem->file_name) + 1];
             ymodem->file_size = str_to_u32(file_size);
-            printf("file name : %s, size : %d\r\n", ymodem->file_name, ymodem->file_size);
-            if (ymodem->begin_packet_cb)
-                ymodem->begin_packet_cb(&packet[PACKET_HEADER], packet_size);
+            ym_printf("file name : %s, size : %ld\r\n", ymodem->file_name, ymodem->file_size);
+            if (ymodem->begin_packet_cb) {
+                if (ymodem->begin_packet_cb(&packet[PACKET_HEADER], packet_size) != 0)
+                    return -1;
+            }
+            ymodem_putc_and_show(ymodem, YMODEM_CODE_ACK);
+            ymodem_putc_and_show(ymodem, YMODEM_CODE_CRC);
             break;
         } else if (ret == -1) {
             //timeout
@@ -258,7 +273,7 @@ static int ymodem_handshake(struct ymodem *ymodem)
 int ymodem_receive_file_data(struct ymodem *ymodem)
 {
     unsigned char packet[PACKET_OVERHEAD+PACKET_1K_SIZE];
-    int packet_size = 0;
+    unsigned long packet_size = 0;
     int i, ret = -1;
     int retry = 0;
 
@@ -268,23 +283,26 @@ int ymodem_receive_file_data(struct ymodem *ymodem)
         ret = receive_packet(ymodem, packet, &packet_size);
         if (ret == 0) {
             if (packet_size) {
-                if (ymodem->data_packet_cb)
-                    ymodem->data_packet_cb(&packet[PACKET_HEADER], packet_size);
-                ymodem_putchar_and_show(ymodem, YMODEM_CODE_ACK);
+                if (ymodem->data_packet_cb &&
+                        ymodem->data_packet_cb(&packet[PACKET_HEADER], packet_size) != 0) {
+                    return -1;
+                }
+                ymodem_putc_and_show(ymodem, YMODEM_CODE_ACK);
             } else if (packet[0] == YMODEM_CODE_CAN) {
                 /* the spec require multiple CAN */
                 for (i = 0; i < YMODEM_END_SESSION_SEND_CAN_NUM; i++) {
-                    ymodem_putchar_and_show(ymodem, YMODEM_CODE_CAN);
+                    ymodem_putc_and_show(ymodem, YMODEM_CODE_CAN);
                 }
             } else if (packet[0] == YMODEM_CODE_EOT) {
                 //EOT
                 return 0;
             }
         } else {
-            if (retry++ > MAX_ERRORS)
-                return -1;
-            else
-                printf("retry!\r\n");
+            if (retry++ > MAX_ERRORS) {
+                break;
+            } else {
+                ym_printf("retry!\r\n");
+            }
         }
     }
     return -1;
@@ -294,20 +312,20 @@ static int ymodem_recv_finsh(struct ymodem *ymodem)
 {
     int ch, ret;
     unsigned char packet[PACKET_OVERHEAD+PACKET_1K_SIZE];
-    int packet_size = 0;
+    unsigned long packet_size = 0;
 
     ymodem->stage = YMODEM_STAGE_FINISHING;
     /* we already got one EOT in the caller. invoke the callback if there is
      * one. */
-    ymodem_putchar_and_show(ymodem, YMODEM_CODE_NAK);
+    ymodem_putc_and_show(ymodem, YMODEM_CODE_NAK);
 
     ch = ymodem->getchar();
     if (ch != YMODEM_CODE_EOT)
         return -1;
     ymodem_show_packet((unsigned char*)&ch, 0);
 
-    ymodem_putchar_and_show(ymodem, YMODEM_CODE_ACK);
-    ymodem_putchar_and_show(ymodem, YMODEM_CODE_CRC);
+    ymodem_putc_and_show(ymodem, YMODEM_CODE_ACK);
+    ymodem_putc_and_show(ymodem, YMODEM_CODE_CRC);
 
     ret = receive_packet(ymodem, packet, &packet_size);
     if (ret != 0)
@@ -316,7 +334,7 @@ static int ymodem_recv_finsh(struct ymodem *ymodem)
     if (packet_size != PACKET_SIZE)
         return -1;
 
-    ymodem_putchar_and_show(ymodem, YMODEM_CODE_ACK);
+    ymodem_putc_and_show(ymodem, YMODEM_CODE_ACK);
 
     if (ymodem->end_packet_cb)
             ymodem->end_packet_cb(&packet[PACKET_HEADER], packet_size);
@@ -324,7 +342,7 @@ static int ymodem_recv_finsh(struct ymodem *ymodem)
     if (packet[3] != 0x0) { //还有文件要接收
         if (ymodem->begin_packet_cb)
             ymodem->begin_packet_cb(&packet[PACKET_HEADER], packet_size);
-        ymodem_putchar_and_show(ymodem, YMODEM_CODE_CRC);
+        ymodem_putc_and_show(ymodem, YMODEM_CODE_CRC);
         return 0;
     }
     
@@ -402,7 +420,7 @@ int ymodem_receive(struct ymodem *ymodem)
     ret = ymodem_handshake(ymodem);
     if (ret != 0)
         return ret;
-
+    
     while (1) {
         ret = ymodem_receive_file_data(ymodem);
         if (ret != 0)
@@ -463,7 +481,7 @@ static void send_packet0(struct ymodem *ymodem, char* filename, unsigned long si
         while(*num) {
             block[count++] = *num++;
         }
-        printf("file name: %s, size: %d\r\n", block, size);
+        ym_printf("file name: %s, size: %d\r\n", block, size);
     }
 
     while (count < PACKET_SIZE) {
@@ -481,7 +499,7 @@ static void send_data_packets(struct ymodem *ymodem)
     unsigned long i, size, send_size;
     int ch;
     unsigned char packet_data[PACKET_1K_SIZE];
-    char *data = ymodem->data;
+    unsigned char *data = ymodem->data;
     int retry = 0;
 
     size = ymodem->file_size;
@@ -508,8 +526,7 @@ static void send_data_packets(struct ymodem *ymodem)
             if (ymodem->data_packet_cb)
                 ymodem->data_packet_cb(packet_data, send_size);
 
-            // ch = ymodem->getchar();
-            ch = ymodem_getchar_and_show(ymodem);
+            ch = ymodem_getc_and_show(ymodem);
             if (ch == YMODEM_CODE_ACK) {
                 retry = 0;
                 blockno++;
@@ -530,20 +547,17 @@ static void send_data_packets(struct ymodem *ymodem)
     }
 
     do {
-        ymodem_putchar_and_show(ymodem, YMODEM_CODE_EOT);
-        // ch = ymodem->getchar();
-        ch = ymodem_getchar_and_show(ymodem);
+        ymodem_putc_and_show(ymodem, YMODEM_CODE_EOT);
+        ch = ymodem_getc_and_show(ymodem);
     } while((ch != YMODEM_CODE_ACK) && (ch != -1));
 
     /* Send last data packet */
     if (ch == YMODEM_CODE_ACK) {
-        // ch = ymodem->getchar();
-        ch = ymodem_getchar_and_show(ymodem);
+        ch = ymodem_getc_and_show(ymodem);
         if (ch == YMODEM_CODE_CRC) {
             do {
                 send_packet0(ymodem, 0, 0);
-                // ch = ymodem->getchar();
-                ch = ymodem_getchar_and_show(ymodem);
+                ch = ymodem_getc_and_show(ymodem);
             } while((ch != YMODEM_CODE_ACK) && (ch != -1));
         }
     }
@@ -562,19 +576,15 @@ int ymodem_send(struct ymodem *ymodem)
     int retry = 0;
 
     do {
-        // ch = ymodem->getchar();
-        ch = ymodem_getchar_and_show(ymodem);
-        
-    } while (retry++ < 1000 && ch != YMODEM_CODE_CRC);
+        ch = ymodem_getc_and_show(ymodem);
+    } while (retry++ < YMODEM_TIMEOUT && ch != YMODEM_CODE_CRC);
 
     if (ch == YMODEM_CODE_CRC) {
         while (1) {
             send_packet0(ymodem, ymodem->file_name, ymodem->file_size);
-            // ch = ymodem->getchar();
-            ch = ymodem_getchar_and_show(ymodem);
+            ch = ymodem_getc_and_show(ymodem);
             if (ch == YMODEM_CODE_ACK) {
-                // ch = ymodem->getchar();
-                ch = ymodem_getchar_and_show(ymodem);
+                ch = ymodem_getc_and_show(ymodem);
                 if (ch == YMODEM_CODE_CRC) {
                     send_data_packets(ymodem);
                     return 0;
@@ -587,8 +597,8 @@ int ymodem_send(struct ymodem *ymodem)
             }
         }
     } else {
-        ymodem_putchar_and_show(ymodem, YMODEM_CODE_CAN);
-        ymodem_putchar_and_show(ymodem, YMODEM_CODE_CAN);
+        ymodem_putc_and_show(ymodem, YMODEM_CODE_CAN);
+        ymodem_putc_and_show(ymodem, YMODEM_CODE_CAN);
     }
 
     return -1;
